@@ -1,6 +1,6 @@
 # BMDR Setup
 
-A general-purpose project boilerplate for modern web applications with autonomous deployment capabilities.
+A general-purpose project boilerplate with CLI tooling for modern web applications and autonomous deployment pipelines.
 
 ## 🎯 What This Provides
 
@@ -9,92 +9,173 @@ A general-purpose project boilerplate for modern web applications with autonomou
 - **Docker Compose** for local development and production
 - **GitHub Actions** CI/CD pipeline
 - **Cloudflare Tunnel** integration for instant public URLs
+- **Kubernetes** manifests with Kustomize
 - **Health checks** and monitoring endpoints
 - **Environment-based configuration**
-- **Autonomous deployment** ready — designed for AI agent pipelines
+- **BMDR CLI** for project scaffolding and management
+- **PR/Issue templates** for consistent workflows
+- **Hermes skill templates** for AI agent integration
 
 ## 🚀 Quick Start
 
 ### Prerequisites
+- Python 3.11+
 - Docker + Docker Compose
 - GitHub account
 - Cloudflare account (for tunnel)
 
-### Local Development
+### Install BMDR CLI
+
 ```bash
-git clone https://github.com/YOUR_ORG/bmdr-setup.git my-project
-cd my-project
-cp .env.example .env
-# Edit .env with your values
-docker-compose up --build
+git clone https://github.com/bmdr-bot/bmdr-setup.git
+cd bmdr-setup
+pip install -e .
 ```
 
-App will be available at: http://localhost:8000
+### Initialize Configuration
 
-### Deploy to Production
 ```bash
-# Set your Cloudflare tunnel token
-export CF_TUNNEL_TOKEN="your-token-here"
-
-# Deploy
-docker-compose -f docker-compose.prod.yml up -d
+bmdr init
 ```
+
+### Create a New Project
+
+```bash
+# Create from default template
+bmdr create my-awesome-app --github
+
+# Create with specific template
+bmdr create my-api --template api --github --protect
+
+# Create private repo
+bmdr create my-secret-project --private --github
+```
+
+## 📋 BMDR CLI Commands
+
+### `bmdr init`
+Initialize BMDR CLI configuration (GitHub org, projects directory, defaults).
+
+### `bmdr create <name>`
+Create a new project from template.
+
+**Options:**
+- `--template, -t` — Template to use (default, api, microservice)
+- `--dir, -d` — Target directory
+- `--author, -a` — Project author
+- `--description` — Project description
+- `--github, -g` — Create GitHub repository
+- `--private` — Private repository
+- `--org` — Use organization account
+- `--protect` — Enable branch protection
+
+### `bmdr template list`
+List available project templates.
+
+### `bmdr deploy --target <target>`
+Deploy project to target environment.
+
+**Targets:**
+- `docker` — Docker Compose deployment
+- `kubernetes` — Kubernetes deployment
+- `cloudflare` — Start Cloudflare tunnel
+
+### `bmdr skill list`
+List installed Hermes skills.
+
+### `bmdr pr <title>`
+Create a pull request from template.
+
+**Options:**
+- `--head` — Head branch (required)
+- `--base` — Base branch (default: main)
+- `--template, -t` — PR template (default, feature, bugfix, hotfix, release)
+- `--description, -d` — PR description
+- `--create, -c` — Create on GitHub
+- `--repo, -r` — Repository name
 
 ## 📁 Project Structure
 
 ```
 .
-├── app/                    # Application code
+├── bmdr_cli/              # CLI source code
 │   ├── __init__.py
-│   ├── main.py            # FastAPI entry point
+│   ├── commands.py        # CLI commands
 │   ├── config.py          # Configuration management
-│   ├── routers/           # API route modules
-│   ├── models/            # Data models
-│   └── services/          # Business logic
+│   ├── github_ops.py      # GitHub API operations
+│   └── templates.py       # Template rendering engine
+├── templates/             # Project templates
+│   ├── default/           # Default FastAPI project
+│   ├── pr/                # PR templates
+│   ├── issue/             # Issue templates
+│   └── skill/             # Hermes skill templates
+├── app/                   # Example application
 ├── tests/                 # Test suite
 ├── scripts/               # Deployment scripts
-│   ├── deploy.sh
-│   └── setup-tunnel.sh
-├── .github/               # GitHub Actions workflows
-│   └── workflows/
-│       ├── ci.yml
-│       └── deploy.yml
-├── docker/                # Docker configurations
-│   ├── Dockerfile
-│   └── Dockerfile.prod
+├── k8s/                   # Kubernetes manifests
+├── .github/workflows/     # GitHub Actions
 ├── docker-compose.yml     # Local development
-├── docker-compose.prod.yml # Production deployment
-├── .env.example           # Environment template
-├── .dockerignore
-├── .gitignore
+├── docker-compose.prod.yml # Production
+├── Dockerfile             # Multi-stage build
+├── requirements.txt
+├── pyproject.toml
+├── setup.py               # CLI package setup
 └── README.md
 ```
 
-## 🔧 Configuration
+## 🎨 Templates
 
-All configuration is environment-based. Copy `.env.example` to `.env` and customize:
+### Project Templates
+- **default** — Basic FastAPI app with health checks
+- **api** — Full API with CRUD, auth, database
+- **microservice** — Lightweight service template
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `APP_NAME` | Application name | `bmdr-app` |
-| `APP_ENV` | Environment (dev/staging/prod) | `dev` |
-| `APP_PORT` | HTTP port | `8000` |
-| `LOG_LEVEL` | Logging level | `info` |
-| `CF_TUNNEL_TOKEN` | Cloudflare tunnel token | (required for prod) |
+### PR Templates
+- **default** — Standard PR template
+- **feature** — Feature PR with testing checklist
+- **bugfix** — Bug fix PR with root cause analysis
+- **hotfix** — Expedited hotfix template
+- **release** — Release PR with deployment notes
+
+### Issue Templates
+- **bug** — Bug report with reproduction steps
+- **feature** — Feature request with problem statement
+
+### Skill Templates
+- Hermes SKILL.md format
+- Setup scripts
+- Best practices built-in
 
 ## 🌐 Cloudflare Tunnel
 
 This setup uses Cloudflare Tunnel to expose your app securely without opening firewall ports.
 
 ### Setup
-1. Install `cloudflared`: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/
-2. Create a tunnel: `cloudflared tunnel create bmdr-app`
-3. Get your token from `~/.cloudflared/*.json`
-4. Set `CF_TUNNEL_TOKEN` in your environment
+```bash
+bmdr deploy --target cloudflare
+```
 
-### URLs
-- Local: http://localhost:8000
-- Public (via tunnel): https://your-domain.com
+Or manually:
+```bash
+./scripts/setup-tunnel.sh my-app
+```
+
+## 🔧 Development
+
+### Run Tests
+```bash
+pytest tests/ -v
+```
+
+### Lint
+```bash
+ruff check app/ bmdr_cli/
+```
+
+### Type Check
+```bash
+mypy app/ bmdr_cli/
+```
 
 ## 🔄 CI/CD Pipeline
 
@@ -115,37 +196,22 @@ This setup uses Cloudflare Tunnel to expose your app securely without opening fi
 
 Built-in endpoints:
 - `GET /health` — Basic health check
-- `GET /ready` — Readiness probe (checks dependencies)
+- `GET /ready` — Readiness probe
 - `GET /metrics` — Prometheus-compatible metrics
 
 ## 🛠️ Customization
 
-### Adding a New Route
-```python
-# app/routers/items.py
-from fastapi import APIRouter
+### Adding a New Project Template
 
-router = APIRouter(prefix="/items", tags=["items"])
+1. Create directory in `templates/<name>/`
+2. Add template files with `$variable` placeholders
+3. Use `bmdr create <name> --template <name>`
 
-@router.get("/")
-async def list_items():
-    return {"items": []}
-```
+### Adding a New PR Template
 
-Register in `app/main.py`:
-```python
-from app.routers import items
-app.include_router(items.router)
-```
-
-### Changing the Tech Stack
-This boilerplate uses FastAPI + Python, but the structure works for:
-- Node.js + Express/Fastify
-- Go + Gin/Fiber
-- Ruby on Rails
-- Any containerized app
-
-Replace `app/` and `Dockerfile` with your stack.
+1. Create file in `templates/pr/<name>.md`
+2. Use `{{variable}}` for runtime substitution
+3. Use `bmdr pr <title> --template <name>`
 
 ## 📜 License
 
