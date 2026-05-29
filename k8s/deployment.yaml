@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bmdr-app
+  namespace: bmdr-setup
+  labels:
+    app: bmdr-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bmdr-app
+  template:
+    metadata:
+      labels:
+        app: bmdr-app
+    spec:
+      containers:
+      - name: app
+        image: ghcr.io/bmdr-bot/bmdr-setup:latest
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: APP_NAME
+          value: "bmdr-app"
+        - name: APP_ENV
+          value: "prod"
+        - name: APP_PORT
+          value: "8000"
+        - name: APP_HOST
+          value: "0.0.0.0"
+        - name: LOG_LEVEL
+          value: "info"
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: bmdr-secrets
+              key: secret-key
+        livenessProbe:
+          httpGet:
+            path: /health/
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
