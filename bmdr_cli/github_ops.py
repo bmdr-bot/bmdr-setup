@@ -110,23 +110,37 @@ class GitHubOps:
         )
         return True
 
-    def create_pr(self, owner: str, repo: str, title: str, body: str, head: str, base: str = "main") -> Dict[str, Any]:
+    def create_pr(self, owner: str, repo: str, title: str, body: str, head: str, base: str = "main", draft: bool = False) -> Dict[str, Any]:
         """Create a pull request."""
         data = {
             "title": title,
             "body": body,
             "head": head,
             "base": base,
+            "draft": draft,
         }
         return self._request("POST", f"/repos/{owner}/{repo}/pulls", data)
 
-    def list_templates(self, owner: str, repo: str) -> List[str]:
-        """List repository templates."""
-        try:
-            contents = self._request("GET", f"/repos/{owner}/{repo}/contents/templates")
-            return [item["name"] for item in contents if item["type"] == "dir"]
-        except Exception:
-            return []
+    def request_reviewers(self, owner: str, repo: str, pr_number: int, reviewers: List[str]) -> Dict[str, Any]:
+        """Request reviewers for a PR."""
+        data = {"reviewers": reviewers}
+        return self._request("POST", f"/repos/{owner}/{repo}/pulls/{pr_number}/requested_reviewers", data)
+
+    def merge_pr(self, owner: str, repo: str, pr_number: int, method: str = "squash") -> Dict[str, Any]:
+        """Merge a pull request."""
+        data = {"merge_method": method}
+        return self._request("PUT", f"/repos/{owner}/{repo}/pulls/{pr_number}/merge", data)
+
+    def get_pr(self, owner: str, repo: str, pr_number: int) -> Dict[str, Any]:
+        """Get pull request details."""
+        return self._request("GET", f"/repos/{owner}/{repo}/pulls/{pr_number}")
+
+    def list_open_prs(self, owner: str, repo: str, head: Optional[str] = None) -> Any:
+        """List open pull requests."""
+        params = "?state=open"
+        if head:
+            params += f"&head={head}"
+        return self._request("GET", f"/repos/{owner}/{repo}/pulls{params}")
 
 
 def get_github_ops() -> GitHubOps:

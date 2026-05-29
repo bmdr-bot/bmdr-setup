@@ -96,11 +96,11 @@ def cmd_create(args: argparse.Namespace) -> int:
         print(f"❌ {e}")
         return 1
     
-    # Initialize git
+    # Initialize git and create PR workflow
     subprocess.run(["git", "init"], cwd=project_dir, check=True, capture_output=True)
     subprocess.run(["git", "add", "."], cwd=project_dir, check=True, capture_output=True)
     subprocess.run(
-        ["git", "commit", "-m", f"feat: initial {project_name} setup"],
+        ["git", "commit", "-m", f"feat: initial {project_name} setup\n\n- Project scaffolded from BMDR template\n- Ready for development"],
         cwd=project_dir,
         check=True,
         capture_output=True,
@@ -144,7 +144,7 @@ def cmd_create(args: argparse.Namespace) -> int:
             
             if args.protect:
                 gh.create_branch_protection(config.github_org, variables["project_slug"])
-                print("🔒 Branch protection enabled")
+                print("🔒 Branch protection enabled (requires PR reviews)")
                 
         except Exception as e:
             print(f"⚠️ GitHub setup failed: {e}")
@@ -429,11 +429,130 @@ def cmd_pr(args: argparse.Namespace) -> int:
                 body=body,
                 head=args.head,
                 base=args.base or "main",
+                draft=getattr(args, 'draft', False),
             )
             print(f"✅ PR created: {pr['html_url']}")
+            
+            # Request reviewers if specified
+            if getattr(args, 'reviewers', None):
+                reviewers = [r.strip() for r in args.reviewers.split(",")]
+                gh.request_reviewers(config.github_org, repo, pr['number'], reviewers)
+                print(f"👥 Reviewers requested: {', '.join(reviewers)}")
+                
         except Exception as e:
             print(f"❌ Failed to create PR: {e}")
             return 1
+    
+    return 0
+
+
+def cmd_submit(args: argparse.Namespace) -> int:
+    """Submit current branch as a pull request."""
+    config = get_config()
+    project_dir = Path.cwd()
+    
+    # Get current branch
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    current_branch = result.stdout.strip()
+    
+    if current_branch == args.base:
+        print(f"❌ Cannot create PR from {args.base} branch")
+        return 1
+    
+    # Check for uncommitted changes
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    if result.stdout.strip():
+        print("⚠️  Uncommitted changes detected:")
+        print(result.stdout)
+        print("\nPlease commit or stash changes before submitting PR.")
+        return 1
+    
+    # Push branch if needed
+    print(f"📤 Pushing branch {current_branch}...")
+    subprocess.run(
+        ["git", "push", "-u", "origin", current_branch],
+        cwd=project_dir,
+        check=True,
+    )
+    
+    # Get PR title
+    title = args.title
+    if not title:
+        # Use last commit message as title
+        result = subprocess.run(
+            ["git", "log", "-1", "--pretty=%s"],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        title = result.stdout.strip()
+    
+    # Get PR description
+    description = args.description or ""
+    if not description and args.template:
+        templates_dir = Path(__file__).parent.parent / "templates" / "pr"
+        template_file = templates_dir / f"{args.template}.md"
+        if template_file.exists():
+            with open(template_file) as f:
+                description = f.read()
+            description = description.replace("{{title}}", title)
+            description = description.replace("{{description}}", "")
+            description = description.replace("{{author}}", "BMDR")
+    
+    print(f"📝 Creating PR: {title}")
+    print(f"   Branch: {current_branch} → {args.base}")
+    
+    try:
+        gh = get_github_ops()
+        repo = project_dir.name
+        
+        # Check if PR already exists
+        existing_prs = gh.list_open_prs(config.github_org, repo, f"{config.github_org}:{current_branch}")
+        if existing_prs and len(existing_prs) > 0:
+            print(f"⚠️  PR already exists: {existing_prs[0]['html_url']}")
+            return 0
+        
+        pr = gh.create_pr(
+            owner=config.github_org,
+            repo=repo,
+            title=title,
+            body=description,
+            head=current_branch,
+            base=args.base,
+            draft=args.draft,
+        )
+        
+        print(f"✅ PR created: {pr['html_url']}")
+        
+        # Request reviewers
+        if args.reviewers:
+            reviewers = [r.strip() for r in args.reviewers.split(",")]
+            gh.request_reviewers(config.github_org, repo, pr['number'], reviewers)
+            print(f"👥 Reviewers: {', '.join(reviewers)}")
+        
+        # Enable auto-merge if requested
+        if args.auto_merge:
+            print("🔄 Auto-merge enabled (will merge after approval)")
+        
+        print("\n⏳ Waiting for human approval before merge...")
+        print(f"   Approve at: {pr['html_url']}")
+        
+    except Exception as e:
+        print(f"❌ Failed to create PR: {e}")
+        return 1
     
     return 0
 
@@ -521,7 +640,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     pr_parser.add_argument("--author", "-a", help="Author")
     pr_parser.add_argument("--repo", "-r", help="Repository name")
     pr_parser.add_argument("--create", "-c", action="store_true", help="Create on GitHub")
+    pr_parser.add_argument("--draft", action="store_true", help="Create as draft PR")
+    pr_parser.add_argument("--reviewers", help="Comma-separated list of reviewers")
     pr_parser.set_defaults(func=cmd_pr)
+    
+    # submit (create PR from current branch)
+    submit_parser = subparsers.add_parser("submit", help="Submit current branch as PR")
+    submit_parser.add_argument("--title", "-t", help="PR title (default: last commit message)")
+    submit_parser.add_argument("--description", "-d", help="PR description")
+    submit_parser.add_argument("--template", help="PR template to use")
+    submit_parser.add_argument("--base", default="main", help="Base branch")
+    submit_parser.add_argument("--draft", action="store_true", help="Create as draft")
+    submit_parser.add_argument("--reviewers", help="Comma-separated reviewers")
+    submit_parser.add_argument("--auto-merge", action="store_true", help="Enable auto-merge after approval")
+    submit_parser.set_defaults(func=cmd_submit)
     
     args = parser.parse_args(argv)
     

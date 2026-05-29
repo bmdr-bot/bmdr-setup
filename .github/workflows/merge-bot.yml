@@ -1,0 +1,76 @@
+name: Auto-Merge Bot
+
+on:
+  pull_request_review:
+    types: [submitted]
+    branches: [main]
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: github.event.review.state == 'approved'
+    
+    steps:
+      - name: Check Auto-Merge Conditions
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const review = context.payload.review;
+            
+            console.log(`PR #${pr.number} approved by ${review.user.login}`);
+            
+            // Check if all checks passed
+            const checks = await github.rest.checks.listForRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: pr.head.sha
+            });
+            
+            const allPassed = checks.data.check_runs.every(check => 
+              check.conclusion === 'success' || check.conclusion === 'skipped'
+            );
+            
+            if (!allPassed) {
+              console.log('❌ Not all checks passed, skipping auto-merge');
+              return;
+            }
+            
+            // Check for security label
+            const hasSecurityLabel = pr.labels.some(label => 
+              label.name === 'security' || label.name === 'needs-approval'
+            );
+            
+            if (hasSecurityLabel) {
+              console.log('🔒 Security-related PR, requires manual merge');
+              await github.rest.issues.createComment({
+                issue_number: pr.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## 🔒 Manual Merge Required
+                
+                This PR has been **approved** but requires **manual merge** due to security implications.
+                
+                **Approver:** @${review.user.login}
+                **Status:** Ready to merge (all checks passed)
+                
+                Please merge manually after final verification.`
+              });
+              return;
+            }
+            
+            // Auto-merge for non-security PRs
+            console.log('✅ Auto-merging PR...');
+            await github.rest.pulls.merge({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              merge_method: 'squash'
+            });
+            
+            await github.rest.issues.createComment({
+              issue_number: pr.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `✅ **Auto-merged** by bot after approval from @${review.user.login}`
+            });
