@@ -7,8 +7,10 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from bmdr_cli.approval import ApprovalType, get_approval_gate
 from bmdr_cli.config import get_config
 from bmdr_cli.github_ops import get_github_ops
+from bmdr_cli.opencode_ops import get_opencode_ops
 from bmdr_cli.templates import TemplateEngine
 
 
@@ -18,7 +20,6 @@ def cmd_init(args: argparse.Namespace) -> int:
     
     print("🔧 Initializing BMDR CLI...")
     
-    # Interactive setup
     org = input(f"GitHub org/username [{config.github_org}]: ").strip()
     if org:
         config.set("github_org", org)
@@ -28,7 +29,29 @@ def cmd_init(args: argparse.Namespace) -> int:
         config.set("projects_base_dir", projects_dir)
         Path(projects_dir).expanduser().mkdir(parents=True, exist_ok=True)
     
-    print(f"✅ Config saved to {config.CONFIG_FILE}")
+    # Approval settings
+    print("\n🛡️  Approval Gate Configuration")
+    print("Critical operations requiring human approval:")
+    
+    require_prod = input("Require approval for production deployment? [Y/n]: ").strip().lower()
+    if require_prod == "n":
+        config.set("approvals.deploy_production", False)
+    else:
+        config.set("approvals.deploy_production", True)
+    
+    require_secret = input("Require approval for secret changes? [Y/n]: ").strip().lower()
+    if require_secret == "n":
+        config.set("approvals.secret_change", False)
+    else:
+        config.set("approvals.secret_change", True)
+    
+    require_infra = input("Require approval for infrastructure changes? [Y/n]: ").strip().lower()
+    if require_infra == "n":
+        config.set("approvals.infra_change", False)
+    else:
+        config.set("approvals.infra_change", True)
+    
+    print(f"\n✅ Config saved to {config.CONFIG_FILE}")
     return 0
 
 
@@ -41,7 +64,6 @@ def cmd_create(args: argparse.Namespace) -> int:
     print(f"🚀 Creating project: {project_name}")
     print(f"📋 Template: {template}")
     
-    # Determine project directory
     if args.dir:
         project_dir = Path(args.dir).expanduser()
     else:
@@ -53,7 +75,6 @@ def cmd_create(args: argparse.Namespace) -> int:
     
     project_dir.mkdir(parents=True)
     
-    # Prepare variables
     variables = {
         "project_name": project_name,
         "project_slug": project_name.lower().replace(" ", "-"),
@@ -66,7 +87,6 @@ def cmd_create(args: argparse.Namespace) -> int:
         "year": "2024",
     }
     
-    # Copy template
     templates_dir = Path(__file__).parent.parent / "templates"
     engine = TemplateEngine(templates_dir)
     
@@ -100,7 +120,6 @@ def cmd_create(args: argparse.Namespace) -> int:
                 org=config.github_org if args.org else None,
             )
             
-            # Add remote and push
             remote_url = repo["clone_url"].replace("https://", f"https://{gh.token}@")
             subprocess.run(
                 ["git", "remote", "add", "origin", remote_url],
@@ -123,7 +142,6 @@ def cmd_create(args: argparse.Namespace) -> int:
             
             print(f"✅ GitHub repo: {repo['html_url']}")
             
-            # Setup branch protection
             if args.protect:
                 gh.create_branch_protection(config.github_org, variables["project_slug"])
                 print("🔒 Branch protection enabled")
@@ -136,6 +154,85 @@ def cmd_create(args: argparse.Namespace) -> int:
     print(f"  cd {project_dir}")
     print("  cp .env.example .env")
     print("  ./scripts/run-local.sh")
+    
+    return 0
+
+
+def cmd_dev(args: argparse.Namespace) -> int:
+    """Start development session with OpenCode."""
+    project_dir = Path(args.dir) if args.dir else Path.cwd()
+    
+    if not (project_dir / ".git").exists():
+        print(f"❌ Not a git repository: {project_dir}")
+        return 1
+    
+    print(f"🚀 Starting OpenCode development session in {project_dir}")
+    
+    try:
+        oc = get_opencode_ops()
+        print(f"OpenCode version: {oc.version()}")
+        
+        if args.task:
+            print(f"\n📝 Task: {args.task}")
+            print("Running OpenCode... (this may take a while)")
+            
+            result = oc.run_task(
+                prompt=args.task,
+                workdir=project_dir,
+                model=args.model,
+                thinking=args.thinking,
+                timeout=args.timeout,
+            )
+            
+            if result["success"]:
+                print("\n✅ Task completed successfully")
+                print("\nOutput:")
+                print(result["stdout"])
+            else:
+                print("\n❌ Task failed")
+                print(result["stderr"])
+                return 1
+        else:
+            print("\n💡 No task specified. Use --task 'your task here'")
+            print("Starting interactive session...")
+            # Would start interactive session here
+            
+    except RuntimeError as e:
+        print(f"❌ {e}")
+        return 1
+    
+    return 0
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    """Review PR with OpenCode."""
+    project_dir = Path(args.dir) if args.dir else Path.cwd()
+    
+    if not args.pr:
+        print("❌ PR number required. Use --pr <number>")
+        return 1
+    
+    print(f"🔍 Reviewing PR #{args.pr} with OpenCode...")
+    
+    try:
+        oc = get_opencode_ops()
+        result = oc.review_pr(
+            pr_number=args.pr,
+            workdir=project_dir,
+            model=args.model,
+        )
+        
+        if result["success"]:
+            print("\n✅ Review completed")
+            print(result["stdout"])
+        else:
+            print("\n❌ Review failed")
+            print(result["stderr"])
+            return 1
+            
+    except RuntimeError as e:
+        print(f"❌ {e}")
+        return 1
     
     return 0
 
@@ -167,6 +264,24 @@ def cmd_deploy(args: argparse.Namespace) -> int:
     config = get_config()
     project_dir = Path(args.dir) if args.dir else Path.cwd()
     target = args.target or "docker"
+    
+    # Check approval requirements
+    gate = get_approval_gate()
+    
+    if target == "production":
+        approval_type = ApprovalType.DEPLOY_PRODUCTION
+        if gate.requires_approval(approval_type):
+            req = gate.request(
+                approval_type=approval_type,
+                title=f"Deploy {project_dir.name} to production",
+                description=f"Production deployment requested for {project_dir.name}",
+                metadata={"project": str(project_dir), "target": target},
+            )
+            
+            if req:
+                print(f"⏳ Waiting for approval: {req.id}")
+                if not gate.wait_for_approval(req.id):
+                    return 1
     
     print(f"🚀 Deploying to {target}...")
     
@@ -207,6 +322,57 @@ def cmd_deploy(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_approve(args: argparse.Namespace) -> int:
+    """Approve a pending request."""
+    gate = get_approval_gate()
+    
+    if args.request_id:
+        if gate.store.approve(args.request_id, args.approver or os.getenv("USER", "unknown")):
+            print(f"✅ Approved request: {args.request_id}")
+            return 0
+        else:
+            print(f"❌ Failed to approve request: {args.request_id}")
+            return 1
+    
+    # List pending requests
+    pending = gate.store.list_pending()
+    if not pending:
+        print("No pending approval requests")
+        return 0
+    
+    print("\n📋 Pending Approval Requests:")
+    print("-" * 60)
+    for req in pending:
+        print(f"ID: {req.id}")
+        print(f"Type: {req.type.value}")
+        print(f"Title: {req.title}")
+        print(f"Requester: {req.requester}")
+        print(f"Expires in: {req.expires_at - __import__('time').time():.0f}s")
+        print("-" * 60)
+    
+    return 0
+
+
+def cmd_reject(args: argparse.Namespace) -> int:
+    """Reject a pending request."""
+    gate = get_approval_gate()
+    
+    if not args.request_id:
+        print("❌ Request ID required")
+        return 1
+    
+    if gate.store.reject(
+        args.request_id,
+        args.approver or os.getenv("USER", "unknown"),
+        args.reason or "",
+    ):
+        print(f"❌ Rejected request: {args.request_id}")
+        return 0
+    else:
+        print(f"❌ Failed to reject request: {args.request_id}")
+        return 1
+
+
 def cmd_skill(args: argparse.Namespace) -> int:
     """Manage Hermes skills."""
     skills_dir = Path.home() / ".hermes" / "skills"
@@ -223,12 +389,10 @@ def cmd_skill(args: argparse.Namespace) -> int:
     
     elif args.action == "install":
         print(f"📥 Installing skill: {args.skill_name}")
-        # Implementation would download/install skill
         return 0
     
     elif args.action == "create":
         print(f"🛠️  Creating skill template: {args.skill_name}")
-        # Create skill template
         return 0
     
     return 1
@@ -238,7 +402,6 @@ def cmd_pr(args: argparse.Namespace) -> int:
     """Create a pull request from template."""
     config = get_config()
     
-    # Load PR template
     templates_dir = Path(__file__).parent.parent / "templates" / "pr"
     template_file = templates_dir / f"{args.template}.md" if args.template else templates_dir / "default.md"
     
@@ -248,7 +411,6 @@ def cmd_pr(args: argparse.Namespace) -> int:
     with open(template_file) as f:
         body = f.read()
     
-    # Replace variables
     body = body.replace("{{title}}", args.title)
     body = body.replace("{{description}}", args.description or "")
     body = body.replace("{{author}}", args.author or "BMDR")
@@ -303,6 +465,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     create_parser.add_argument("--protect", action="store_true", help="Enable branch protection")
     create_parser.set_defaults(func=cmd_create)
     
+    # dev (OpenCode)
+    dev_parser = subparsers.add_parser("dev", help="Start OpenCode development session")
+    dev_parser.add_argument("--dir", "-d", help="Project directory")
+    dev_parser.add_argument("--task", help="Task for OpenCode")
+    dev_parser.add_argument("--model", help="Model override")
+    dev_parser.add_argument("--thinking", action="store_true", help="Show thinking")
+    dev_parser.add_argument("--timeout", type=int, default=300, help="Timeout in seconds")
+    dev_parser.set_defaults(func=cmd_dev)
+    
+    # review (OpenCode)
+    review_parser = subparsers.add_parser("review", help="Review PR with OpenCode")
+    review_parser.add_argument("--pr", type=int, required=True, help="PR number")
+    review_parser.add_argument("--dir", "-d", help="Project directory")
+    review_parser.add_argument("--model", help="Model override")
+    review_parser.set_defaults(func=cmd_review)
+    
     # template
     template_parser = subparsers.add_parser("template", help="Manage templates")
     template_parser.add_argument("action", choices=["list", "add"], help="Action")
@@ -310,9 +488,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     
     # deploy
     deploy_parser = subparsers.add_parser("deploy", help="Deploy project")
-    deploy_parser.add_argument("--target", "-t", choices=["docker", "kubernetes", "cloudflare"], help="Deployment target")
+    deploy_parser.add_argument("--target", "-t", choices=["docker", "kubernetes", "cloudflare", "production"], help="Deployment target")
     deploy_parser.add_argument("--dir", "-d", help="Project directory")
     deploy_parser.set_defaults(func=cmd_deploy)
+    
+    # approve
+    approve_parser = subparsers.add_parser("approve", help="Approve pending request")
+    approve_parser.add_argument("request_id", nargs="?", help="Request ID to approve")
+    approve_parser.add_argument("--approver", help="Approver name")
+    approve_parser.set_defaults(func=cmd_approve)
+    
+    # reject
+    reject_parser = subparsers.add_parser("reject", help="Reject pending request")
+    reject_parser.add_argument("request_id", help="Request ID to reject")
+    reject_parser.add_argument("--approver", help="Approver name")
+    reject_parser.add_argument("--reason", help="Rejection reason")
+    reject_parser.set_defaults(func=cmd_reject)
     
     # skill
     skill_parser = subparsers.add_parser("skill", help="Manage Hermes skills")
